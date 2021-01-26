@@ -58,7 +58,8 @@ class SALTResults( base._DataHolder_ ):
     def set_data(self, saltresults_df):
         """ """
         self._data = saltresults_df
-
+        self._dataparam = None
+        
     # ------- #
     # GETTER  #
     # ------- #
@@ -82,15 +83,25 @@ class SALTResults( base._DataHolder_ ):
         return model
     
     def get_target_lightcurve(self, targetname, bands, jd=None, timerange=[-20,50], bins=70,
-                             zp=25, zpsys="ab"):
+                             zp=25, zpsys="ab", squeeze=False):
         """ """
         model = self.get_target_model(targetname)
         t0 = model.get("t0")
         if jd is None:
             jd = np.linspace(t0+timerange[0], t0+timerange[1], bins)
+        if type(bands) == str and squeeze:
+            return jd, model.bandflux(bands, jd, zp=zp, zpsys=zpsys)
+        
         return jd, {b_:model.bandflux(b_, jd, zp=zp, zpsys=zpsys) 
                 for b_ in np.atleast_1d(bands)}
-    
+
+    def get_parameters_dataframe(self, targetnames=None):
+        """ """
+        if targetnames is None:
+            targetnames= self.targetnames
+            
+        return pandas.DataFrame({name_:self.get_target_parameters(name_) for name_ in targetnames}).T
+
     # =============== #
     #   Properties    #
     # =============== #
@@ -105,6 +116,17 @@ class SALTResults( base._DataHolder_ ):
     def has_data(self):
         """ """
         return self.data is not None
+
+    @property
+    def parameters(self):
+        """ DataFrame with the fitted parameters (derived from data using get_parameters_dataframe) """
+        if not hasattr(self,"_parameters") or self._parameters is None:
+            if self.has_data():
+                self._parameters = self.get_parameters_dataframe()
+            else:
+                return None
+        return self._parameters
+        
     
     @property
     def targetnames(self):

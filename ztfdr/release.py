@@ -1,7 +1,8 @@
 #! /usr/bin/env python
 #
-
+import numpy as np
 import pandas
+import warnings
 
 from .lightcurves import ZTFLightCurves
 from .salt import SALTResults
@@ -38,32 +39,75 @@ class ZTFDataRelease( object ):
         else:
             raise TypeError(f"input `lightcurves` must be a pandas.DataFrame or a ZTFLightCurves ; type: {type(lightcurves)} given")
 
-    def set_saltresults(self, salresults):
+    def set_saltresults(self, saltresults):
         """ """
-        if type(salresults) == pandas.DataFrame:
-            self._saltresults = SALTResults(salresults)
-        elif type(salresults) == SALTResults:
-            self._saltresults = salresults
+        if type(saltresults) == pandas.DataFrame:
+            self._saltresults = SALTResults(saltresults)
+        elif type(saltresults) == SALTResults:
+            self._saltresults = saltresults
         else:
             raise TypeError(f"input `salresults` must be a pandas.DataFrame or a SaltResults ; type: {type(salresults)} given")
         
-    
     # ------- #
     # GETTER  #
-    # ------- #    
-    def get_target_lightcurve(self, targetname, which=["data", "model", "residual"], 
-                             zp=25, timerange=[-20,50], filternan=False):
+    # ------- #
+    def get_targetnames(self, isin="both"):
         """ """
-        data   = self.lightcurves.get_target_lightcurve(targetname,zp=zp, filternan=filternan)
-        bands_ = list(data.keys())
-        model  = self.saltresults.get_target_lightcurve(targetname, bands_, zp=zp, timerange=timerange)
+        if isin == "both":
+            return [name for name in self.lightcurves.targetnames if name in self.saltresults.targetnames]
+        if isin in ["lc","lightcurves"]:
+            return self.lightcurves.targetnames
+        if isin == ["salt","saltresults"]:
+            return self.saltresults.targetnames
+        raise ValueError(f"cannot parse the given isin ({isin}) 'both','lightcurves' or 'saltresults' accepted.")
+
+    def get_model_of(self, targetdata, targetname, name="model"):
+        """ """
+        if targetname not in self.saltresults.targetnames:
+            return pandas.Series(index=targetdata.index, dtype="object")
         
-        residual = {k:{"jd":v["jd"],
-                       "flux":v["flux"]-self.saltresults.get_target_lightcurve(targetname, k, jd=v["jd"])[1][k],
-                        "fluxerr":v["fluxerr"]}
-                 for k,v in data.items()}
-        return {"data":data, "model":model, "residual":residual}
+        model = []
+        for b_,index_ in targetdata.groupby("band").groups.items():
+            model.append(pandas.Series(self.saltresults.get_target_lightcurve(targetname, b_, 
+                                                           jd=targetdata.loc[index_]["jd"], squeeze=True)[1], 
+                  index=index_, name=name))
+            
+        return pandas.concat(model)
+        
+    def add_model_to(self, targetdata, targetname, name="model", overwrite=False):
+        """ """
+        if name in targetdata and not overwrite:
+            warnings.warn(f"{name} columns already in targetdata. Set overwrite to True to overwrite")
+            return
+        
+        modelserie =self.get_model_of(targetdata, targetname, name="model")
+        return targetdata.join(modelserie)
+        
     
+    def get_target_lightcurve(self, targetname, **kwargs):
+        """ """
+        return self.lcdata.xs(targetname)
+
+    # ------- #
+    # BUILDER #
+    # ------- #
+    def build_target_lightcurve(self, targetname, filternan=False, addmodel=True):
+        """ """
+        data   = self.lightcurves.get_target_data(targetname, formatted=True, filternan=filternan)
+        if addmodel:
+            data = self.add_model_to(data, targetname)
+            data["residual"] = data["flux"] - data["model"]
+        return data
+
+
+    def build_lightcurves(self, targetnames=None):
+        """ """
+        if targetnames is None:
+            targetnames = self.get_targetnames(isin="both")
+            
+        return pandas.concat([self.build_target_lightcurve(name_, filternan=True)
+                                  for name_ in targetnames], keys=targetnames)
+
     # -------- #
     # PLOTTER  #
     # -------- #
@@ -95,42 +139,44 @@ class ZTFDataRelease( object ):
 
         # 
         # - Data
-        lightcurves = self.get_target_lightcurve(targetname, filternan=True)
-        data, model, residual = lightcurves["data"], lightcurves["model"], lightcurves["residual"]
-        base_prop = dict(ls="None", mec="0.9", mew=0.5, ecolor="0.7")
+        lightcurves = self.get_target_lightcurve(targetname)
+        bands = np.unique(lightcurves["band"])
+        modeltime, modelbands = self.saltresults.get_target_lightcurve(targetname, bands )
         # - Data
         #
 
         #
         # - Properties
+        base_prop = dict(ls="None", mec="0.9", mew=0.5, ecolor="0.7")
         lineprop = dict(color="0.7", zorder=1, lw=0.5)
         # - Properties
         #
         
         #
         # - Plots
-        for filter_, bdata in data.items():
-            if filter_ not in ZTFCOLOR:
-                warnings.warn(f"WARNING: Unknown instrument: {filter_} | magnitude not shown")
+        for band_ in bands:
+            if band_ not in ZTFCOLOR:
+                warnings.warn(f"WARNING: Unknown instrument: {band_} | magnitude not shown")
                 continue
-
-
-            ax.errorbar(Time(bdata["jd"], format="jd").datetime, 
+            
+            bdata = lightcurves[lightcurves["band"]==band_]
+            datatime = Time(bdata["jd"], format="jd").datetime
+            ax.errorbar(datatime,
                          bdata["flux"], 
-                         yerr= bdata["fluxerr"], 
-                         label=filter_, 
-                         **{**base_prop,**ZTFCOLOR[filter_]}
+                         yerr= bdata["flux_err"], 
+                         label=band_, 
+                         **{**base_prop,**ZTFCOLOR[band_]}
                        )
 
             if show_model:
-                ax.plot(Time(model[0], format="jd").datetime,
-                        model[1][filter_], color=ZTFCOLOR[filter_]["mfc"]
+                ax.plot(Time(modeltime, format="jd").datetime,
+                        modelbands[band_], color=ZTFCOLOR[band_]["mfc"]
                        )
-            axres[filter_].plot(Time(residual[filter_]["jd"], format="jd").datetime, 
-                                     residual[filter_]["flux"]/residual[filter_]["fluxerr"],
+            axres[band_].plot(datatime, 
+                                bdata["residual"]/bdata["flux_err"],
                                     marker="o", ls="None", 
-                                ms=ZTFCOLOR[filter_]["ms"]/2, 
-                                mfc=ZTFCOLOR[filter_]["mfc"],
+                                ms=ZTFCOLOR[band_]["ms"]/2, 
+                                mfc=ZTFCOLOR[band_]["mfc"],
                                 mec="0.5"
                            )
 
@@ -138,7 +184,7 @@ class ZTFDataRelease( object ):
         #
 
         for k_, ax_  in axres.items():
-            if k_ not in residual.keys():
+            if k_ not in bands:
                 ax_.text(0.5,0.5, f"No {k_} data", va="center", ha="center", transform=ax_.transAxes, 
                         color=ZTFCOLOR[k_]["mfc"])
                 #ax_.set_xlim(0,1)
@@ -169,8 +215,7 @@ class ZTFDataRelease( object ):
         ax.axhline(0, **lineprop)
 
         [ax_.set_xlim(*ax.get_xlim()) for ax_ in axres.values()]
-        [ax_.set_xticklabels(["" for _ in ax_.get_xticklabels()]) for ax_ in fig.axes if ax_ != bottom_ax]
-        axres[filter_]
+        [ax_.xaxis.set_ticklabels([]) for ax_ in fig.axes if ax_ != bottom_ax]
         
         ax.set_title(targetname, loc="left", fontsize="medium")
         
@@ -180,11 +225,17 @@ class ZTFDataRelease( object ):
         ax.text(1,1, label, va="bottom", ha="right", fontsize="small", color="0.7", 
                transform=ax.transAxes)
 
-
         return ax, axres
     # =============== #
     #   Properties    #
     # =============== #
+    @property
+    def lcdata(self):
+        """ """
+        if not hasattr(self, "_lcdata"):
+            self._lcdata = self.build_lightcurves()
+            
+        return self._lcdata
     @property
     def lightcurves(self):
         """ """

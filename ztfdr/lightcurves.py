@@ -45,34 +45,48 @@ class ZTFLightCurves( base._DataHolder_ ):
             raise ValueError(f"Expecting MultiIndex dataframe, DataFrame with {type(multiindex_dataframe.index)} given")
             
         self._data = multiindex_dataframe
+        self._dataformatted = None
+        
+    def get_formatted_data(self, zp=25):
+        """ """
+        lcdata = self.data.copy()
+        lcdata["fluxcoef"] = 10 ** (-(lcdata["zp"] - zp) / 2.5)
+        lcdata["flux_zp"] = lcdata["flux"] * lcdata["fluxcoef"]
+        lcdata["flux_err_zp"] = lcdata["flux_err"] * lcdata["fluxcoef"]
+        lcdata["detection"] = lcdata["flux"]/lcdata["flux_err"]
+
+        lcout = lcdata[["time", "band", "flux_zp", "flux_err_zp","detection", "zpsys"]
+              ].rename({"time":"jd", "flux_zp":"flux", "flux_err_zp":"flux_err"}, axis=1)
+        lcout["zp"] = zp
+        
+        return lcout
         
     # ------- #
     #  GETTER #
     # ------- #
-    def get_target_data(self, targetname):
-        """ """
-        return self.data.xs(targetname)
+    def get_data(self, formatted=False, filternan=False):
+        """ get a copy of the dataframe."""
+        data_ = self.dataformatted if formatted else self.data
+        if filternan:
+            return data_.dropna()
+        return data_.copy()
     
-    def get_target_lightcurve(self, targetname, zp=25, filternan=False):
+    def get_target_data(self, targetname, formatted=False, filternan=False):
         """ """
-        data = self.get_target_data(targetname)
-        filters = np.unique(data["band"])
-        dataout = {}
-        for filter_ in filters:
-            bdata = data[data["band"]==filter_]
-            jd, flux, fluxerr, effzp = bdata[["time","flux", "flux_err", "zp"]].values.T
-            fluxcoef = 10 ** (-(effzp - zp) / 2.5)
-            flux *= fluxcoef
-            fluxerr *= fluxcoef
-            if filternan:
-                flagnan = np.any(np.isnan([jd, flux, fluxerr]), axis=0)
-                jd = jd[~flagnan]
-                flux = flux[~flagnan]
-                fluxerr = fluxerr[~flagnan]
-
-            dataout[filter_] = {"jd":jd, "flux":flux, "fluxerr":fluxerr}
+        if formatted:
+            tdata = self.dataformatted.xs(targetname)
+        else:
+            tdata = self.data.xs(targetname)
             
-        return dataout
+        if filternan:
+            return tdata.dropna()
+        return tdata
+
+    def get_target_lightcurve(self, targetname, filternan=False):
+        """ """
+        print("get_target_lightcurve is deprecated, use get_target_data(targetname, formatted=True)")
+        return self.get_target_data(targetname, filternan=False)
+    
     
     # =============== #
     #   Properties    #
@@ -84,6 +98,16 @@ class ZTFLightCurves( base._DataHolder_ ):
             return None
         return self.data.index.levels[0]
 
+    @property
+    def dataformatted(self):
+        """ cleaned version of the data, zp corrected, renamed, added columns """
+        if not hasattr(self,"_dataformatted") or self._dataformatted is None:
+            if self.has_data():
+                self._dataformatted = self.get_formatted_data()
+            else:
+                return None
+        return self._dataformatted
+        
 #
 #   SALT Results
 #
