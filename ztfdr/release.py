@@ -91,12 +91,17 @@ class ZTFDataRelease( object ):
     # ------- #
     # BUILDER #
     # ------- #
-    def build_target_lightcurve(self, targetname, filternan=False, addmodel=True):
+    def build_target_lightcurve(self, targetname, filternan=False, addmodel=True, addphase=True,
+                                    maxphase=50):
         """ """
         data   = self.lightcurves.get_target_data(targetname, formatted=True, filternan=filternan)
         if addmodel:
             data = self.add_model_to(data, targetname)
             data["residual"] = data["flux"] - data["model"]
+
+        if addphase:
+            data["phase"] = data["jd"] - self.saltresults.get_target_parameters(targetname)["t0"]
+            data.loc[data["phase"]>maxphase, "residual"] = np.NaN
         return data
 
 
@@ -112,7 +117,7 @@ class ZTFDataRelease( object ):
     # PLOTTER  #
     # -------- #
     def show_lightcurve(self, targetname, fig=None, refzp=25, inmag=False,
-            show_model=True, **kwargs):
+            show_model=True, as_phase=False, axes=None, **kwargs):
         """ 
     
         """
@@ -122,16 +127,24 @@ class ZTFDataRelease( object ):
     
         #
         # - Axes
-        if fig is None:
-            fig = mpl.figure(figsize=[7,5])
-
-        left, bottom, width, heigth, resheigth = 0.15,0.1,0.75,0.55, 0.07
-        vspan, extra_vspan=0.02, 0
-
-        axres = {'p48g': fig.add_axes([left, bottom+0*(resheigth+vspan), width, resheigth]),
-                 'p48r': fig.add_axes([left, bottom+1*(resheigth+vspan), width, resheigth]),
-                 'p48i': fig.add_axes([left, bottom+2*(resheigth+vspan), width, resheigth])}
-        ax = fig.add_axes([left, bottom+3*(resheigth+vspan)+extra_vspan, width, heigth])
+        if axes is not None:
+            if len(axes) != 4:
+                raise ValueError("axes if given must be a list of 4 axes [resg, resr, resi, main]")
+            
+            resg, resr, resi, ax = axes
+            axres = {"p48g":resg, "p48r":resr, "p48i":resi}
+            fig = ax.figure
+        else:
+            if fig is None:
+                fig = mpl.figure(figsize=[7,5])
+        
+            left, bottom, width, heigth, resheigth = 0.15,0.1,0.75,0.55, 0.07
+            vspan, extra_vspan=0.02, 0
+            ax = fig.add_axes([left, bottom+3*(resheigth+vspan)+extra_vspan, width, heigth])
+            axres = {'p48g': fig.add_axes([left, bottom+0*(resheigth+vspan), width, resheigth]),
+                     'p48r': fig.add_axes([left, bottom+1*(resheigth+vspan), width, resheigth]),
+                     'p48i': fig.add_axes([left, bottom+2*(resheigth+vspan), width, resheigth])}
+            
 
         bottom_ax = axres["p48g"]
         # - Axes
@@ -141,7 +154,10 @@ class ZTFDataRelease( object ):
         # - Data
         lightcurves = self.get_target_lightcurve(targetname)
         bands = np.unique(lightcurves["band"])
-        modeltime, modelbands = self.saltresults.get_target_lightcurve(targetname, bands )
+        modeltime, modelbands = self.saltresults.get_target_lightcurve(targetname, bands,
+                                                                           as_phase=as_phase)
+        if not as_phase:
+            modeltime=Time(modeltime, format="jd").datetime
         # - Data
         #
 
@@ -160,7 +176,11 @@ class ZTFDataRelease( object ):
                 continue
             
             bdata = lightcurves[lightcurves["band"]==band_]
-            datatime = Time(bdata["jd"], format="jd").datetime
+            if not as_phase:
+                datatime = Time(bdata["jd"], format="jd").datetime
+            else:
+                datatime = bdata["phase"]
+                
             ax.errorbar(datatime,
                          bdata["flux"], 
                          yerr= bdata["flux_err"], 
@@ -169,9 +189,10 @@ class ZTFDataRelease( object ):
                        )
 
             if show_model:
-                ax.plot(Time(modeltime, format="jd").datetime,
+                ax.plot(modeltime,
                         modelbands[band_], color=ZTFCOLOR[band_]["mfc"]
                        )
+                
             axres[band_].plot(datatime, 
                                 bdata["residual"]/bdata["flux_err"],
                                     marker="o", ls="None", 
@@ -187,8 +208,6 @@ class ZTFDataRelease( object ):
             if k_ not in bands:
                 ax_.text(0.5,0.5, f"No {k_} data", va="center", ha="center", transform=ax_.transAxes, 
                         color=ZTFCOLOR[k_]["mfc"])
-                #ax_.set_xlim(0,1)
-                ax_.set_ylim(0,1)     
                 ax_.set_yticks([])
                 ax_.set_xticks([])
             else:
@@ -207,10 +226,14 @@ class ZTFDataRelease( object ):
         #ax.invert_yaxis()  
 
         # Data locator
-        locator = mdates.AutoDateLocator()
-        formatter = mdates.ConciseDateFormatter(locator)
-        bottom_ax.xaxis.set_major_locator(locator)
-        bottom_ax.xaxis.set_major_formatter(formatter)
+        if not as_phase:
+            locator = mdates.AutoDateLocator()
+            formatter = mdates.ConciseDateFormatter(locator)
+            bottom_ax.xaxis.set_major_locator(locator)
+            bottom_ax.xaxis.set_major_formatter(formatter)
+        else:
+            bottom_ax.set_xlabel("phase [days]")
+            
         ax.set_ylabel("flux")
         ax.axhline(0, **lineprop)
 
@@ -225,7 +248,64 @@ class ZTFDataRelease( object ):
         ax.text(1,1, label, va="bottom", ha="right", fontsize="small", color="0.7", 
                transform=ax.transAxes)
 
+        #
+        # - Align
+
+        #
+        #
         return ax, axres
+
+    def show_phase_statistics(self, ax=None, statistic="median", 
+                              onkey="residual", bins=None, detection_limit=None):
+        """ """
+        from scipy.stats import binned_statistic
+        import matplotlib.pyplot as mpl
+        #
+        # - Data
+        if detection_limit is None:
+            data = self.lcdata
+        else:
+            data = self.lcdata[self.lcdata["detection"]>detection_limit]
+
+        databgrouped = data.groupby("band")
+        if bins is None:
+            bins = np.arange(-20, 100)
+        binsplotted = np.mean([bins[:-1],bins[1:]], axis=0)
+        # - Data
+        #
+
+        #
+        # - Axes
+        if ax is None:
+
+            fig = mpl.figure(figsize=[8,3])
+            ax  = fig.add_axes([0.1,0.2,0.8,0.7])
+        else:
+            fig = ax.figure
+        # - Axes
+        #
+
+
+        for band_ in databgrouped.groups.keys():
+            datag = databgrouped.get_group(band_)
+            ax.plot(binsplotted, 
+                    binned_statistic(datag["phase"], datag[onkey], 
+                                     statistic=statistic, bins=bins).statistic,
+                    color= ZTFCOLOR[band_]["mfc"])
+
+        ax.axhline(0, lw=0.5, zorder=1, color="0.7")
+        ax.set_xlabel("Phase [days]")
+        if statistic in ["count"]:
+            ax.set_ylabel("Counts")
+        else:
+            ax.set_ylabel(onkey)
+
+        message = f"{statistic} statistic"
+        if detection_limit is not None:
+            message += f" | detection > {detection_limit}"+r"$\sigma$"
+
+        ax.set_title(message, loc="right", fontsize="small", color="0.5")
+        return ax
     # =============== #
     #   Properties    #
     # =============== #

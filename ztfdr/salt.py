@@ -83,16 +83,17 @@ class SALTResults( base._DataHolder_ ):
         return model
     
     def get_target_lightcurve(self, targetname, bands, jd=None, timerange=[-20,50], bins=70,
-                             zp=25, zpsys="ab", squeeze=False):
+                             zp=25, zpsys="ab", squeeze=False, as_phase=False):
         """ """
         model = self.get_target_model(targetname)
         t0 = model.get("t0")
         if jd is None:
             jd = np.linspace(t0+timerange[0], t0+timerange[1], bins)
+            
         if type(bands) == str and squeeze:
-            return jd, model.bandflux(bands, jd, zp=zp, zpsys=zpsys)
+            return jd if not as_phase else jd-t0, model.bandflux(bands, jd, zp=zp, zpsys=zpsys)
         
-        return jd, {b_:model.bandflux(b_, jd, zp=zp, zpsys=zpsys) 
+        return jd if not as_phase else jd-t0, {b_:model.bandflux(b_, jd, zp=zp, zpsys=zpsys) 
                 for b_ in np.atleast_1d(bands)}
 
     def get_parameters_dataframe(self, targetnames=None):
