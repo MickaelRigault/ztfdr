@@ -96,7 +96,7 @@ class ZTFLightCurves( base._DataHolder_ ):
         """ """
         if not self.has_data():
             return None
-        return self.data.index.levels[0]
+        return self.data.index.get_level_values(0).unique() #.levels[0] has issues
 
     @property
     def dataformatted(self):

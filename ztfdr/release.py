@@ -8,8 +8,11 @@ from .lightcurves import ZTFLightCurves
 from .salt import SALTResults
 from .base import ZTFCOLOR
 
+from .config import PECULIARS
+
 
 class ZTFDataRelease( object ):
+    
     def __init__(self, lightcurves=None, saltresults=None):
         """ """
         if lightcurves is not None:
@@ -51,8 +54,26 @@ class ZTFDataRelease( object ):
     # ------- #
     # GETTER  #
     # ------- #
+    def get_filtered_data(self, sample=None, detection_limit=None, phase_range=None):
+        """ """
+        data = self.lcdata.copy()
+        if sample is not None:
+            data= data.loc[self.get_targetnames(sample)]
+
+        if detection_limit is not None:
+            data = data[data["detection"]>detection_limit]
+
+        if phase_range is not None:
+            data = data[data["phase"].between(*phase_range)]
+
+        return data
+
     def get_targetnames(self, isin="both"):
         """ """
+        if isin in ["gold","goldsample", "main"]:
+            selection = self.get_selection_criteria(targetnames=self.get_targetnames("both"))
+            return np.asarray(selection.index[~selection.any(axis=1)], dtype="str")
+            
         if isin == "both":
             return [name for name in self.lightcurves.targetnames if name in self.saltresults.targetnames]
         if isin in ["lc","lightcurves"]:
@@ -60,6 +81,57 @@ class ZTFDataRelease( object ):
         if isin == ["salt","saltresults"]:
             return self.saltresults.targetnames
         raise ValueError(f"cannot parse the given isin ({isin}) 'both','lightcurves' or 'saltresults' accepted.")
+
+    
+    def get_selection_criteria(self, targetnames=None, 
+                                     zrange=[0.015,0.1], 
+                                     peculiars=["91bg","Iax"],
+                                     phase_coverage=[-10,10], minphase_points=3,
+                                     x1err_range=[0,1],
+                                     cerr_range=None,
+                                     x1_range=[-3,3],
+                                     c_range=[-0.3,0.3],
+                                     ):
+        """ """
+        if targetnames is None:
+            targetnames = self.get_targetnames()
+
+        saltparams = self.saltresults.parameters.loc[targetnames]
+
+        cut_list = []
+        # = Redshift Range Cut
+        if zrange is not None:
+            cut_list.append(~saltparams["z"].between(*zrange).rename("z_cut"))
+
+        # = Peculiar Cases Cut
+        if peculiars is not None:
+            odd_names = np.concatenate([PECULIARS.get(k) for k in peculiars])
+            cut_list.append(pandas.Series(np.isin(targetnames,odd_names), index=targetnames, name="pec_cut"))
+
+        # = Phase Coverage Cut
+        if phase_coverage is not None:
+            cut_list.append((self.get_targets_phase_coverage(-10,10, targetnames=targetnames
+                                                            )["any"]<minphase_points).rename("phase_cut"))
+        #
+        #  = Salt Cuts
+        #
+        # - x1 errors
+        if x1err_range is not None:
+            cut_list.append(~saltparams["x1_err"].between(*x1err_range).rename("x1err_cut"))
+
+        # - c errors    
+        if cerr_range is not None:
+            cut_list.append(~saltparams["c_err"].between(*cerr_range).rename("cerr_cut"))
+
+        # - x1 range
+        if x1_range is not None:
+            cut_list.append(~saltparams["x1"].between(*x1_range).rename("x1_cut"))
+
+        # - c range        
+        if c_range is not None:
+            cut_list.append(~saltparams["c"].between(*c_range).rename("c_range"))
+
+        return pandas.concat(cut_list, axis=1)
 
     def get_model_of(self, targetdata, targetname, name="model"):
         """ """
@@ -88,6 +160,30 @@ class ZTFDataRelease( object ):
         """ """
         return self.lcdata.xs(targetname)
 
+    
+    def get_targets_phase_coverage(self, minphase, maxphase, targetnames=None, 
+                                  detection_limit=5):
+        """ """
+        if targetnames is None:
+            targetnames = self.get_targetnames()
+
+        data = self.lcdata.loc[targetnames]
+
+        if detection_limit is not None:
+            data = data[data["detection"]>5]
+
+        # Black Grouby magic that split per ban, 
+        # then cut per phase 
+        # and count per name the number of points in the given phase.
+        list_of_coverage = [pandas.cut(data.loc[groupindex]["phase"], bins=[minphase,maxphase]).isin([minphase,maxphase]
+                                                                            ).reset_index(0).rename({"level_0":"name"}, axis=1
+                                                                            ).groupby("name").sum().rename({"phase":groupname}, axis=1)
+                            for groupname, groupindex in data.groupby("band").groups.items()]
+        datacoverage = pandas.concat(list_of_coverage, axis=1)
+        datacoverage["any"] = datacoverage.sum(axis=1)
+        return datacoverage
+
+    
     # ------- #
     # BUILDER #
     # ------- #
@@ -103,7 +199,6 @@ class ZTFDataRelease( object ):
             data["phase"] = data["jd"] - self.saltresults.get_target_parameters(targetname)["t0"]
             data.loc[data["phase"]>maxphase, "residual"] = np.NaN
         return data
-
 
     def build_lightcurves(self, targetnames=None):
         """ """
@@ -316,6 +411,7 @@ class ZTFDataRelease( object ):
             self._lcdata = self.build_lightcurves()
             
         return self._lcdata
+    
     @property
     def lightcurves(self):
         """ """
