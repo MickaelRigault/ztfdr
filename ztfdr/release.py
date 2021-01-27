@@ -54,11 +54,14 @@ class ZTFDataRelease( object ):
     # ------- #
     # GETTER  #
     # ------- #
-    def get_filtered_data(self, sample=None, detection_limit=None, phase_range=None):
+    def get_filtered_data(self, sample=None, targetnames=None, detection_limit=None, phase_range=None):
         """ """
         data = self.lcdata.copy()
         if sample is not None:
             data= data.loc[self.get_targetnames(sample)]
+
+        if targetnames is not None:
+            data = data.loc[targetnames]
 
         if detection_limit is not None:
             data = data[data["detection"]>detection_limit]
@@ -164,13 +167,8 @@ class ZTFDataRelease( object ):
     def get_targets_phase_coverage(self, minphase, maxphase, targetnames=None, 
                                   detection_limit=5):
         """ """
-        if targetnames is None:
-            targetnames = self.get_targetnames()
-
-        data = self.lcdata.loc[targetnames]
-
-        if detection_limit is not None:
-            data = data[data["detection"]>5]
+        data = self.get_filtered_data(targetnames=targetnames,
+                                      detection_limit=detection_limit)
 
         # Black Grouby magic that split per ban, 
         # then cut per phase 
@@ -183,6 +181,14 @@ class ZTFDataRelease( object ):
         datacoverage["any"] = datacoverage.sum(axis=1)
         return datacoverage
 
+
+    def get_saltparameters(self, sample=None, targetnames=None):
+        """ """
+        data = self.saltresults.parameters.loc[self.get_targetnames(sample)]
+        if targetnames is not None:
+            data = data.loc[targetnames]
+            
+        return data
     
     # ------- #
     # BUILDER #
@@ -357,10 +363,7 @@ class ZTFDataRelease( object ):
         import matplotlib.pyplot as mpl
         #
         # - Data
-        if detection_limit is None:
-            data = self.lcdata
-        else:
-            data = self.lcdata[self.lcdata["detection"]>detection_limit]
+        data = self.get_filtered_data(detection_limit=detection_limit)
 
         databgrouped = data.groupby("band")
         if bins is None:
