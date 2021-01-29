@@ -404,6 +404,205 @@ class ZTFDataRelease( object ):
 
         ax.set_title(message, loc="right", fontsize="small", color="0.5")
         return ax
+
+    def show_xcz(self, sample="gold", savefile=None, fig=None, zbins=10, cmap="cividis_r", zrange = [0.01,0.1],
+                 mec = "w", mew=0.2, ms=50, ecolor="0.7", elw=1,
+                 filterprop={}, hfc="0.7", hfc_alpha=0.5, hec="k", hec_alpha=1,
+                ):
+        """ """
+        import matplotlib
+        import matplotlib.pyplot as mpl
+        from scipy import stats
+        sparam = self.get_saltparameters(sample=sample, **filterprop)
+
+
+        if fig is None:
+            fig = mpl.figure(figsize=[5,5])
+
+        facecolor = matplotlib.colors.to_rgba(hfc, hfc_alpha)
+        edgecolor = matplotlib.colors.to_rgba(hec, hec_alpha)
+
+
+
+        cmap = mpl.cm.get_cmap(cmap, zbins)
+
+        left, right, width, heigth = 0.15,0.15,0.65,0.65
+        hwidth, span = 0.15, 0.0
+        cbarh = 0.02
+
+        ax  = fig.add_axes([left, right, width, heigth], facecolor="w")
+        axt = fig.add_axes([left, right+width+span, width, hwidth], facecolor="None")
+        axr = fig.add_axes([left+width+span, right, hwidth, heigth], facecolor="None")
+
+        axz = fig.add_axes([left+width-0.11,  0.1+right+width,       hwidth*1.8, cbarh], facecolor="None")
+        axzh = fig.add_axes([left+width-0.11, 0.105+right+width+cbarh, hwidth*1.8, hwidth/3], facecolor="None")
+
+
+
+        #
+        # = Scatter Plot
+        #
+        ax.errorbar(sparam["x1"], sparam["c"], xerr=sparam["x1_err"], yerr=sparam["c_err"],
+                   ls="None", marker="None", ecolor=ecolor, lw=elw,
+                    mfc="None",ms=0, #matplotlib.colors.to_rgba("C1", 0.8),
+                    zorder=2)
+
+        sc = ax.scatter(sparam["x1"], sparam["c"], c=sparam["z"], zorder=5,
+                         cmap=cmap, ec=mec, lw=mew, s=ms, vmin=zrange[0], vmax=zrange[1])
+
+        # Formatting Scatter plot (for hist)
+        ax.tick_params(bottom=True, top=True, left=True, right=True)
+        ax.set_ylim(-0.35,0.35)
+        ax.set_xlim(-3.5,3.5)
+
+
+        #
+        # = HistColorbar
+        #
+        z_intensity, binegdes = np.histogram(sparam["z"], range=zrange, bins=zbins)
+        bins = {"edge":binegdes,"centroid":np.mean([binegdes[1:],binegdes[:-1]], axis=0),
+                "width":binegdes[1:]-binegdes[:-1],
+                "size":len(binegdes)-1, "vmin":binegdes[0],
+                "vmax":binegdes[-1]}
+        bins["colors"] = cmap((bins["centroid"] - bins["vmin"])/(
+                               bins["vmax"] - bins["vmin"]))
+
+        cbar = fig.colorbar(sc, cax=axz, orientation="horizontal")
+        axzh.bar(bins["centroid"], z_intensity, 
+                  width=bins["width"], color=bins["colors"],
+                  alpha=0.9)
+
+        axzh.set_xlim(*axz.get_xlim())
+        axzh.set_xticks([])
+        axzh.set_yticks([])
+        cbar.set_ticks([0.02, 0.05, 0.08])
+        axz.tick_params(axis="x", labelsize="x-small")
+
+        #
+        # = Histograms
+        #
+
+        # - X1
+        xx = np.linspace(-4,4, 100)
+        ideo_x1 = stats.norm.pdf(xx[:,None], loc=sparam["x1"], scale=sparam["x1_err"])
+
+        axt.fill_between(xx, np.sum(ideo_x1, axis=1), 
+                        facecolor=facecolor,
+                        edgecolor=edgecolor, lw=1)
+
+        axt.set_xticks([])
+        axt.set_xlim(*ax.get_xlim())
+        axt.set_ylim(0)
+        axt.set_yticks([])
+        axt.xaxis.set_ticklabels([])
+
+
+        # - C
+        c = np.linspace(-0.5,0.5, 100)
+        ideo_c = stats.norm.pdf(c[:,None], loc=sparam["c"], scale=sparam["c_err"])
+
+        axr.fill_betweenx(c, np.sum(ideo_c, axis=1), 
+                        facecolor=facecolor,
+                        edgecolor=edgecolor, lw=1)
+
+        axr.set_yticks([])
+        axr.set_ylim(*ax.get_ylim())
+        axr.set_xlim(0)
+        axr.set_xticks([])
+        axr.yaxis.set_ticklabels([])
+
+        # 
+        # = Fancy it
+        #
+        # - clear axis 
+        clearwhich = ["left","right","top","bottom"]
+        [[ax_.spines[which].set_visible(False) for which in clearwhich]
+         for ax_ in [axr,axt, axzh]]
+
+
+        # - Labels
+        cbar.set_label("reshift (helio)", fontsize="x-small",loc="center")
+        ax.set_xlabel(f"stretch ($x_1$)")
+        ax.set_ylabel(f"color ($c$)")
+
+        if savefile is not None:
+            fig.savefig(savefile)
+
+        return fig
+
+
+    def get_coordinates(self, sample="both"):
+        from ztfquery import marshal
+        m = marshal.MarshalAccess.load_local()
+        return m.target_sources[m.target_sources["name"].isin(self.get_targetnames(isin=sample))][["name","ra","dec"]].groupby("name").mean()
+
+    def show_field_stat(self,  savefile=None, sample="both", reffields="cosmo", log_daterange=["2018-03-31","2019-01-01"],
+                       log_filter={"query":"pid in [1,2]"}):
+        """ """
+        import matplotlib.pyplot as mpl
+        from ztfquery import fields, skyvision
+        if reffields == "cosmo":
+            reffields = fields.get_fieldid(grid="main", decrange=[-30,None], ebvrange=[0,0.1])
+
+        logs = skyvision.CompletedLog.from_daterange(*log_daterange)
+
+        #
+        # - DATA
+        coordinates = self.get_coordinates(sample=sample)
+        all_fields = np.concatenate([fields.get_fields_containing_target(*coords_) 
+                                     for name_,coords_ in coordinates.iterrows()])
+        fserie = pandas.Series(*np.unique(all_fields, return_counts=True)[::-1])
+        # - DATA
+        #
+        fig = mpl.figure(figsize=[9,4])
+        left, width, heigth = 0.05, 0.6, 0.8
+        ax  = fig.add_axes([left,0.2, width,heigth], projection="hammer")
+        cax = fig.add_axes([left,0.14,width,0.02])
+
+        spanh = 0.1
+        left_ztf = left+width+spanh
+        width_ztf = 0.15
+        heigth_ztf = 0.25
+
+        AXES = {1:{"ax":fig.add_axes([left_ztf,0.7,width_ztf,heigth_ztf], projection="hammer"),
+                   "cax":fig.add_axes([left_ztf,0.7,width_ztf,0.01])},
+                2:{"ax":fig.add_axes([left_ztf,0.42,width_ztf,heigth_ztf], projection="hammer"),
+                   "cax":fig.add_axes([left_ztf,0.42,width_ztf,0.01])},
+                3:{"ax":fig.add_axes([left_ztf,0.14,width_ztf,heigth_ztf], projection="hammer"),
+                   "cax":fig.add_axes([left_ztf,0.14,width_ztf,0.01])}
+               }
+
+
+        _ = fields.show_fields(fserie[fserie.index.isin(fields.get_grid_field("main"))], 
+                               show_ztf_fields=False, edgecolor="0.7",alpha=1,
+                               ax=ax, cax=cax, 
+                               bkgd_fields=reffields, cmap="cividis", bkgd_prop={"alpha":0.1, "zorder":1})
+        #ax, axc, axh = _.axes
+        ax.tick_params(labelsize="small", labelcolor="0.5")
+        cax.tick_params(labelsize="small")
+        cax.set_xlabel("Number of Supernovae", fontsize="medium")
+
+
+        field_stats = logs.get_fields_stat(perfilter=True, **log_filter)
+
+        CMAPS = {1:"Greens", 2:"Reds", 3:"Oranges"}
+        for fid_ in [1,2,3]:
+            field_ = field_stats.xs(fid_)
+            ax_, cax_ = AXES[fid_]['ax'],AXES[fid_]['cax']
+            _ = fields.show_fields(field_[field_.index.isin(fields.get_grid_field("main"))], 
+                               show_ztf_fields=False, edgecolor="None",alpha=1,
+                               ax=ax_, cax=cax_, #hcax=hcax,
+                               cmap=CMAPS[fid_], vmax="90",mw_prop={"lw":1})
+            ax_.set_xticks([])
+            ax_.set_yticks([])
+            cax_.tick_params(labelsize="xx-small", labelcolor="0.5")
+            if fid_ == 3:
+                cax_.set_xlabel("Number of observations [2018]", fontsize="xx-small")
+
+        if savefile is not None:
+            fig.savefig(savefile)
+            
+        return fig
     # =============== #
     #   Properties    #
     # =============== #
