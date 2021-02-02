@@ -11,7 +11,7 @@ import sncosmo
 
 from . import base
 
-_INDIR = "fitparams/gr/zuds"
+_INDIR = "saltparam"
 
 def read_saltresult_directory(directory):
     files = glob(os.path.join(directory,"*.pkl"))

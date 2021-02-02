@@ -17,7 +17,7 @@ def read_photodirectory(directory):
     return pandas.concat(target_data.values(), keys=target_data.keys())
 
 
-_INDIR = "zuds_sncosmo_files"
+_INDIR = "lightcurves"
 
 class ZTFLightCurves( base._DataHolder_ ):
     def __init__(self, multiindex_dataframe=None):
