@@ -217,7 +217,8 @@ class ZTFDataRelease( object ):
     # -------- #
     # PLOTTER  #
     # -------- #
-    def show_lightcurve(self, targetname, fig=None, refzp=25, inmag=False,
+    def show_lightcurve(self, targetname, fig=None, refzp=25,
+                            inmag=False, limit_det=5, ulength=0.1, ualpha=0.1,
             show_model=True, as_phase=False, axes=None, **kwargs):
         """ 
     
@@ -225,6 +226,7 @@ class ZTFDataRelease( object ):
         import matplotlib.pyplot as mpl
         from matplotlib import dates as mdates
         from astropy.time import Time
+        from . import utils
     
         #
         # - Axes
@@ -257,8 +259,10 @@ class ZTFDataRelease( object ):
         bands = np.unique(lightcurves["band"])
         modeltime, modelbands = self.saltresults.get_target_lightcurve(targetname, bands,
                                                                            as_phase=as_phase)
+
         if not as_phase:
             modeltime=Time(modeltime, format="jd").datetime
+            
         # - Data
         #
 
@@ -281,19 +285,31 @@ class ZTFDataRelease( object ):
                 datatime = Time(bdata["jd"], format="jd").datetime
             else:
                 datatime = bdata["phase"]
-                
-            ax.errorbar(datatime,
-                         bdata["flux"], 
-                         yerr= bdata["flux_err"], 
+
+            # = In Magnitude                
+            if inmag:
+                flag_det = bdata["detection"]>=limit_det
+                y, dy = utils.flux_to_mag(bdata["flux"], bdata["flux_err"], zp=bdata["zp"])
+                my, _ = utils.flux_to_mag(modelbands[band_], None, zp=lightcurves["zp"].unique())
+                # detected
+                ax.errorbar(datatime[flag_det],
+                         y[flag_det],  yerr= dy[flag_det], 
                          label=band_, 
                          **{**base_prop,**ZTFCOLOR[band_]}
                        )
-
-            if show_model:
-                ax.plot(modeltime,
-                        modelbands[band_], color=ZTFCOLOR[band_]["mfc"]
+                                    
+            # = In Flux
+            else:
+                y, dy = bdata["flux"], bdata["flux_err"]
+                my = modelbands[band_]
+            
+                ax.errorbar(datatime,
+                         y,  yerr= dy, 
+                         label=band_, 
+                         **{**base_prop,**ZTFCOLOR[band_]}
                        )
                 
+            # - Residual in sigma    
             axres[band_].plot(datatime, 
                                 bdata["residual"]/bdata["flux_err"],
                                     marker="o", ls="None", 
@@ -301,6 +317,32 @@ class ZTFDataRelease( object ):
                                 mfc=ZTFCOLOR[band_]["mfc"],
                                 mec="0.5"
                            )
+            # = Models
+            if show_model:
+                    ax.plot(modeltime, my, color=ZTFCOLOR[band_]["mfc"]
+                        )
+
+        if inmag:
+            ax.invert_yaxis()
+
+            # = upperlimit
+            for band_ in bands:
+                if band_ not in ZTFCOLOR:
+                    warnings.warn(f"WARNING: Unknown instrument: {band_} | magnitude not shown")
+                    continue
+            
+                bdata = lightcurves[lightcurves["band"]==band_]
+                if not as_phase:
+                    datatime = Time(bdata["jd"], format="jd").datetime
+                else:
+                    datatime = bdata["phase"]
+
+                flag_det = bdata["detection"]>=limit_det
+                upmag, _ = utils.flux_to_mag(bdata["flux_err"]*5, None, zp=bdata["zp"])
+                ax.errorbar(datatime[~flag_det], upmag[~flag_det],
+                                 yerr=ulength, lolims=True, alpha=ualpha,
+                                 color=ZTFCOLOR[band_]["mfc"], 
+                                 ls="None",  label="_no_legend_")
 
         # - Plots        
         #
@@ -334,9 +376,11 @@ class ZTFDataRelease( object ):
             bottom_ax.xaxis.set_major_formatter(formatter)
         else:
             bottom_ax.set_xlabel("phase [days]")
+
+        if not inmag:
+            ax.set_ylabel("flux")
+            ax.axhline(0, **lineprop)
             
-        ax.set_ylabel("flux")
-        ax.axhline(0, **lineprop)
 
         [ax_.set_xlim(*ax.get_xlim()) for ax_ in axres.values()]
         [ax_.xaxis.set_ticklabels([]) for ax_ in fig.axes if ax_ != bottom_ax]
@@ -534,7 +578,8 @@ class ZTFDataRelease( object ):
     def get_coordinates(self, sample="both"):
         from ztfquery import marshal
         m = marshal.MarshalAccess.load_local()
-        return m.target_sources[m.target_sources["name"].isin(self.get_targetnames(isin=sample))][["name","ra","dec"]].groupby("name").mean()
+        return m.target_sources[m.target_sources["name"].isin(self.get_targetnames(isin=sample))][["name","ra","dec"]
+                                                                                                      ].groupby("name").mean()
 
     def show_field_stat(self,  savefile=None, sample="both", reffields="cosmo", log_daterange=["2018-03-31","2019-01-01"],
                        log_filter={"query":"pid in [1,2]"}):
